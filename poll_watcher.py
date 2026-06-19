@@ -588,21 +588,30 @@ async def _lookup_person_by_time(session: aiohttp.ClientSession, episode: dict) 
     if not ep_start:
         logger.debug("Person lookup: нет started_at/opened_at у эпизода")
         return None
-    result = await _api_get(session, "/watcher/client-api/v3/persons", {"limit": 200})
+    result = await _api_get(session, "/watcher/client-api/v3/persons", {"limit": 500})
     if not result or not isinstance(result, dict):
         logger.debug("Person lookup: API persons вернул пустой/невалидный ответ")
         return None
     persons = result.get("persons", [])
     logger.debug(f"Person lookup: получено {len(persons)} персон, ep_start={ep_start}")
-    window = 20000  # ±20 сек в мс
+    window = 60000  # ±60 сек в мс
     best_name = ""
     best_distance = window
+    fallback_name = ""
+    fallback_distance = 999999999
     for p in persons:
         first_seen = p.get("first_seen_at", 0)
         last_seen = p.get("last_seen_at", 0)
         name = p.get("name", "")
         if not name or name == "unknown":
             continue
+        # Fallback: самая близкая персона по last_seen_at (в пределах 5 мин)
+        if last_seen:
+            d = abs(last_seen - ep_start)
+            if d < fallback_distance:
+                fallback_distance = d
+                fallback_name = name
+        # Точное совпадение в окне
         dist = None
         if last_seen and abs(last_seen - ep_start) < best_distance:
             dist = abs(last_seen - ep_start)
@@ -617,6 +626,10 @@ async def _lookup_person_by_time(session: aiohttp.ClientSession, episode: dict) 
     if best_name:
         logger.info(f"Person match: {best_name} (distance={best_distance}ms, ep_start={ep_start})")
         return best_name
+    # Fallback: если нет точного совпадения, но есть персона с ближайшим last_seen (в пределах 3 мин)
+    if fallback_name and fallback_distance < 180000:
+        logger.info(f"Person fallback: {fallback_name} (distance={fallback_distance}ms, ep_start={ep_start})")
+        return fallback_name
     logger.info(f"Person lookup: совпадений не найдено для ep_start={ep_start} (проверено {len(persons)} персон)")
     return None
 
